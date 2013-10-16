@@ -1,0 +1,139 @@
+#!/usr/bin/env ruby
+require 'optparse'
+
+class Check
+  attr_accessor :return_code
+  def initialize
+    @options  = opt_parse
+    @errors   = Array.new
+    @warnings = Array.new
+    @return_code = 3
+    @mtr_run  = run_mtr
+  end
+
+  alias old_backquote `
+  def `(cmd)
+    result = old_backquote(cmd).split("\n")
+    if $? != 0
+      exit 1
+    end
+    result
+  end
+
+  def opt_parse
+    options = Hash.new
+    options[:host] = 'localhost'
+    options[:packet_loss_warn] =  1
+    options[:packet_loss_crit] =  20
+    options[:latency_warn]     =  100
+    options[:latency_crit]     =  150
+    options[:mtr_count]        =  10
+    OptionParser.new do |o|
+      o.on('-h',"prints this menu") { puts o; exit }
+      o.on("-H","--host HOST","which host to run mtr on") { |val| options[:host] = val.to_s }
+      o.on("-l","--latency_warn MS","latency to trigger warning in ms")  { |val| options[:latency_warn] = val.to_i }
+      o.on("-L","--latency_crit MS","latency to trigger critical in ms") { |val| options[:latency_crit] = val.to_i }
+      o.on("-p","--packet_loss_warn PERCENT"," packet lost percent to trigger warning")  { |val| options[:packet_loss_warn] = val.to_i }
+      o.on("-P","--packet_loss_crit PERCENT"," packet loss percent to trigger critical") { |val| options[:packet_loss_crit] = val.to_i }
+      o.on("-c","--count NUM","number of times to ping host with mtr") { |val| options[:mtr_count] = val.to_i }
+      o.parse!
+    end
+    options
+  end
+
+  def run_mtr
+    @mtr_out  = Array.new
+    h = Hash.new
+    mtr_cmd = "mtr -i 2 -t #{@options[:host]} --report -c #{@options[:mtr_count]} --report-wide"
+    stdout = `#{mtr_cmd}`
+    @mtr_out.push(mtr_cmd)
+    stdout.each do |line|
+      if line =~ /^\s+\d/
+        re = /^\s*(\d*).\|--\s*(\S*).*?(\d*?.\d*?)%\s*.*?\d\s+(.*?)\s.*?$/
+        m = re.match(line)
+        id,host,packet_loss,latency_avg = m.captures
+        h[id] = Hash.new()
+        h[id]['host'] = host
+        h[id]['packet_loss'] = packet_loss
+        h[id]['latency_avg'] = latency_avg
+      end
+      @mtr_out.push(line)
+    end
+    h
+  end
+
+  def packet_loss
+    @mtr_run.keys.each do |index|
+      if @mtr_run[index]['packet_loss'].to_i > @options[:packet_loss_crit]
+        @errors.push("There is packet_loss on #{@mtr_run[index]['host']} of #{@mtr_run[index]['packet_loss']}%")
+      elsif @mtr_run[index]['packet_loss'].to_i > @options[:packet_loss_warn]
+        @warnings.push("There is packet_loss on #{@mtr_run[index]['host']} of #{@mtr_run[index]['packet_loss']}%")
+      end
+    end
+  end
+
+  def latency
+    @mtr_run.keys.each do |index|
+      if @mtr_run[index]['latency_avg'].to_i > @options[:latency_crit]
+        @errors.push("There is latency on #{@mtr_run[index]['host']} of #{@mtr_run[index]['latency_avg']}ms")
+      elsif @mtr_run[index]['latency_avg'].to_i > @options[:latency_warn]
+        @warnings.push("There is latency on #{@mtr_run[index]['host']} of #{@mtr_run[index]['latency_avg']}ms")
+      end
+    end
+  end
+
+  def is_ok?
+   ( is_warning? ||  is_critical? ) ? false : true
+  end
+
+  def is_warning?
+    @warnings.size == 0 ? false : true
+  end
+
+  def is_critical?
+    @errors.size == 0 ? false : true
+  end
+
+  def get_service_status
+    if is_critical?
+      status = 'CRITICAL'
+    elsif is_warning?
+      status = 'WARNING'
+    elsif is_ok?
+      status = 'OK'
+    else
+      status = 'UNKNOWN'
+    end
+    status
+  end
+
+  def status
+    puts get_service_status
+    @errors.each {|l| puts "CRITICAL: #{l}"}
+    @warnings.each {|l| puts "WARN: #{l}"}
+    @mtr_out.each {|l| puts l}
+  end
+
+  def run
+    latency
+    packet_loss
+  end
+
+  def return_code
+    if is_critical?
+      @return_code = 2
+    elsif is_warning?
+      @return_code = 1
+    elsif is_ok?
+      @return_code = 0
+    else
+      @return_code = 3
+    end
+    exit @return_code
+  end
+
+end
+check = Check.new
+check.run
+check.status
+check.return_code
