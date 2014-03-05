@@ -49,7 +49,7 @@ class Check
     @mtr_out.push(mtr_cmd)
     stdout.each do |line|
       if line =~ /^\s+\d/
-        re = /^\s*(\d*).\|--\s*(\S*).*?(\d*?.\d*?)%\s*.*?\d\s+(.*?)\s.*?$/
+        re = /^\s*(\d*).\s*(\S*).*?(\d*?.\d*?)%\s*.*?\d\s+(.*?)\s.*?$/
         m = re.match(line)
         id,host,packet_loss,latency_avg = m.captures
         h[id] = Hash.new()
